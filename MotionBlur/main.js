@@ -9,14 +9,17 @@ let rotationSpeed = .2;
 let movementSpeed = .5;
 let canvas;
 let groundAttributes;
-let shaderProgram;
+let shaderProgram, moonShaderProgram;
 let groundVao;
 let moonVao;
+let moonMover = Matrix4.translate(-75, 30, -10);
+let moonRotater = Matrix4.identity();
 let clipFromEye;
-let grassTexture;
 let strafe = 0;
 let forward = 0;
 let camera;
+let step = 0;
+let moonInterval;
 
 async function readImage(url) {
   const image = new Image();
@@ -48,12 +51,18 @@ function render() {
   groundVao.bind();
   groundVao.drawIndexed(gl.TRIANGLES);
   groundVao.unbind();
-  shaderProgram.setUniform1i('grassTexture', 1);
+  shaderProgram.unbind();
+
+  moonShaderProgram.bind();
+
+  moonShaderProgram.setUniformMatrix4('clipFromEye', clipFromEye);
+  moonShaderProgram.setUniformMatrix4('eyeFromWorld', camera.eyeFromWorld);
+  moonShaderProgram.setUniformMatrix4('worldFromModel', moonMover.multiplyMatrix(moonRotater));
+  moonShaderProgram.setUniform1i('grassTexture', 1);
   moonVao.bind();
   moonVao.drawIndexed(gl.TRIANGLES);
   moonVao.unbind();
-
-  shaderProgram.unbind();
+  moonShaderProgram.unbind();
 }
 
 function onResizeWindow() {
@@ -90,8 +99,6 @@ function generateSphere(nlatitudes, nlongitudes, radius) {
     }
   }
 
-  console.log('texPosition first and last', texPositions[0] , texPositions[1], texPositions[texPositions.length-2], texPositions[texPositions.length-1]);
-
   for (let ilongitude = 0; ilongitude < nlongitudes; ++ilongitude) {
     const iNextLongitude = (ilongitude + 1) % nlongitudes;
     for (let ilatitude = 0; ilatitude < nlatitudes - 1; ++ilatitude) {
@@ -108,8 +115,6 @@ function generateSphere(nlatitudes, nlongitudes, radius) {
       );
     }
   }
-
-  //console.log(positions);
   
   const attributes = new VertexAttributes();
   attributes.addAttribute('texPosition', nlatitudes * nlongitudes, 2, texPositions);
@@ -159,7 +164,7 @@ async function initialize() {
     0, 1, 3,
     0, 3, 2,
   ];
-  let moonAttributes = generateSphere(20, 20, 10);
+  let moonAttributes = generateSphere(20, 20, 5);
 
   groundAttributes = new VertexAttributes();
   groundAttributes.addAttribute('position', 4, 3, positions);
@@ -168,52 +173,53 @@ async function initialize() {
   groundAttributes.addIndices(indices);
 
   const vertexSource = `
-uniform mat4 clipFromEye;
-uniform mat4 eyeFromWorld;
-uniform mat4 worldFromModel;
+    uniform mat4 clipFromEye;
+    uniform mat4 eyeFromWorld;
+    uniform mat4 worldFromModel;
 
-in vec3 position;
-in vec2 texPosition;
-in vec3 normal;
+    in vec3 position;
+    in vec2 texPosition;
+    in vec3 normal;
 
-out vec3 mixNormal;
-out vec2 mixTexPosition;
+    out vec3 mixNormal;
+    out vec2 mixTexPosition;
 
-void main() {
-  gl_PointSize = 3.0;
-  gl_Position = clipFromEye * eyeFromWorld * worldFromModel * vec4(position, 1.0);
-  mixNormal = (eyeFromWorld * worldFromModel * vec4(normal, 0.0)).xyz;
-  mixTexPosition = texPosition;
-}
+    void main() {
+      gl_PointSize = 3.0;
+      gl_Position = clipFromEye * eyeFromWorld * worldFromModel * vec4(position, 1.0);
+      mixNormal = (eyeFromWorld * worldFromModel * vec4(normal, 0.0)).xyz;
+      mixTexPosition = texPosition;
+    }
   `;
 
   const fragmentSource = `
-uniform sampler2D grassTexture;
+    uniform sampler2D grassTexture;
 
-const float ambientFactor = 0.5;
-const vec3 lightDirection = normalize(vec3(0.0, 1.0, 0.0));
-const vec3 albedo = vec3(0.8, 0.8, 0.8);
+    const float ambientFactor = 0.5;
+    const vec3 lightDirection = normalize(vec3(0.0, 1.0, 0.0));
+    const vec3 albedo = vec3(0.8, 0.8, 0.8);
 
-in vec3 mixNormal;
-in vec2 mixTexPosition;
+    in vec3 mixNormal;
+    in vec2 mixTexPosition;
 
-out vec4 fragmentColor;
+    out vec4 fragmentColor;
 
-void main() {
-  vec3 normal = normalize(mixNormal);
-  /*float litness = max(0.0, dot(normal, lightDirection));
-  vec3 diffuse = albedo * litness * (1.0 - ambientFactor);
-  vec3 ambient = albedo * ambientFactor;
-  fragmentColor = vec4(diffuse + ambient, 1.0);*/
-  fragmentColor = texture(grassTexture, mixTexPosition);
-}
+    void main() {
+      vec3 normal = normalize(mixNormal);
+      /*float litness = max(0.0, dot(normal, lightDirection));
+      vec3 diffuse = albedo * litness * (1.0 - ambientFactor);
+      vec3 ambient = albedo * ambientFactor;
+      fragmentColor = vec4(diffuse + ambient, 1.0);*/
+      fragmentColor = texture(grassTexture, mixTexPosition);
+    }
   `;
 
-  camera = new Camera(Vector3.fromValues(0, 0, -10), Vector3.fromValues(0, 0, 0), Vector3.fromValues(0, 1, 0));
+  camera = new Camera(Vector3.fromValues(0, 20, -100), Vector3.fromValues(0, 0, 0), Vector3.fromValues(0, 1, 0));
 
   shaderProgram = new ShaderProgram(vertexSource, fragmentSource);
+  moonShaderProgram = new ShaderProgram(vertexSource, fragmentSource);
   groundVao = new VertexArray(shaderProgram, groundAttributes);
-  moonVao = new VertexArray(shaderProgram, moonAttributes);
+  moonVao = new VertexArray(moonShaderProgram, moonAttributes);
 
   window.addEventListener('resize', onResizeWindow);
   onResizeWindow();
@@ -248,6 +254,13 @@ void main() {
     } else if(event.key === 'd') {
       strafe = 1;
     }
+
+    if(event.key === ' ') {
+      if (step == 0) {
+        moonInterval = setInterval(moveTheMoon, 50);
+      }
+      
+    }
   });
 
   window.addEventListener('keyup', event => {
@@ -260,17 +273,34 @@ void main() {
 
   move();
   onResizeWindow();
+  
+}
+
+function moveTheMoon() {
+  const MOVE_DURATION = 100;
+  const MOVE_AMOUNT = 1.5;
+  const DEGREES = 5;
+
+  if (step > MOVE_DURATION) {
+    step = 0;
+    moonMover = Matrix4.translate(-75, 30, -10);
+    moonRotater = Matrix4.identity();
+    clearInterval(moonInterval);
+  } else {
+    step += 1;
+    moonMover = moonMover.multiplyMatrix(Matrix4.translate(MOVE_AMOUNT, 0, 0));
+    moonRotater = moonRotater.multiplyMatrix(Matrix4.rotateX(DEGREES));
+  }
+
+  render();
 }
 
 function move() {
-  //console.log("get ready to move it move it");
   if (forward != 0) {
-    //console.log("moving forward.");
     camera.advance(movementSpeed * forward);
     render();
   } 
   if (strafe != 0) {
-    //console.log("To the left to the left to the right to the right\nOne hop this time");
     camera.strafe(movementSpeed * strafe);
     render();
   }
