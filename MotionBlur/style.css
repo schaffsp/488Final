@@ -2,6 +2,17 @@ body {
   margin: 0;
 }
 
+.controls {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  margin: 5px;
+}
+
+.switch{
+  display: flex;
+}
+
 #canvas {
   position: fixed;
   left: 0;
