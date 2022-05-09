@@ -25,8 +25,8 @@ let blendAmount = 0.0;
 let trailMovers = [];
 let trailRotaters = [];
 let trailVaos = [];
-let trailShader;
-const TRAIL_DEPTH = 3;
+let trailShaders = [];
+const TRAIL_DEPTH = 5;
 
 let blurBox, trailBox;
 
@@ -69,11 +69,33 @@ function render() {
   moonShaderProgram.setUniformMatrix4('worldFromModel', moonMover.multiplyMatrix(moonRotater));
   moonShaderProgram.setUniform1i('defaultTexture', 1);
   moonShaderProgram.setUniform1i('blurredTexture', 2);
-  moonShaderProgram.setUniform1f('opacity', blendAmount);
+  moonShaderProgram.setUniform1f('blendAmount', blendAmount);
+  if (trailVaos.length > 0) {
+    moonShaderProgram.setUniform1f('opacity', 0.0);
+  } else {
+    moonShaderProgram.setUniform1f('opacity', 1.0);
+  }
   moonVao.bind();
   moonVao.drawIndexed(gl.TRIANGLES);
   moonVao.unbind();
   moonShaderProgram.unbind();
+
+  console.log(trailVaos.length, trailMovers.length, trailRotaters.length);
+  console.log(trailMovers[0], trailMovers[1], trailMovers[2]);
+  for (let i = 0; i < trailVaos.length; i++) {
+    trailShaders[i].bind();
+    trailShaders[i].setUniformMatrix4('clipFromEye', clipFromEye);
+    trailShaders[i].setUniformMatrix4('eyeFromWorld', camera.eyeFromWorld);
+    trailShaders[i].setUniformMatrix4('worldFromModel', trailMovers[i].multiplyMatrix(trailRotaters[i]));
+    trailShaders[i].setUniform1i('defaultTexture', 1);
+    trailShaders[i].setUniform1i('blurredTexture', 2);
+    trailShaders[i].setUniform1f('blendAmount', blendAmount);
+    trailShaders[i].setUniform1f('opacity', i / trailVaos.length);
+    trailVaos[i].bind();
+    trailVaos[i].drawIndexed(gl.TRIANGLES);
+    trailVaos[i].unbind();
+    trailShaders[i].unbind();
+  }
 }
 
 function onResizeWindow() {
@@ -100,7 +122,6 @@ function generateSphere(nlatitudes, nlongitudes, radius) {
   for (let ilongitude = 0; ilongitude < nlongitudes; ++ilongitude) {
     const degrees = ilongitude / (nlongitudes - 1) * 360;
     const rotater = Matrix4.rotateY(degrees);
-    //console.log('rotater', rotater);
     for (let ilatitude = 0; ilatitude < nlatitudes; ++ilatitude) {
       const p = rotater.multiplyVector(seedPositions[ilatitude]);
       positions.push(p.x , p.y +10 , p.z);
@@ -236,6 +257,7 @@ async function initialize() {
   const moonFragmentSource = `
     uniform sampler2D defaultTexture;
     uniform sampler2D blurredTexture;
+    uniform float blendAmount;
     uniform float opacity;
 
     const float ambientFactor = 0.5;
@@ -251,7 +273,7 @@ async function initialize() {
       vec3 normal = normalize(mixNormal);
       vec4 texel = texture(defaultTexture, mixTexPosition);
       vec4 texel2 = texture(blurredTexture, mixTexPosition);
-      fragmentColor = mix(texel, texel2, opacity);
+      fragmentColor = mix(texel, texel2, blendAmount) * vec4(opacity);
     }
   `;
 
@@ -298,7 +320,7 @@ async function initialize() {
 
     if(event.key === ' ') {
       if (step == 0) {
-        moonInterval = setInterval(moveTheMoon, 50);
+        moonInterval = setInterval(moveTheMoon, 10);
       }
       
     }
@@ -318,15 +340,19 @@ async function initialize() {
 }
 
 function moveTheMoon() {
-  const MOVE_DURATION = 50;
-  const MAX_SPEED = 10;
-  const DEGREES = 5;
+  const MOVE_DURATION = 200;
+  const MAX_SPEED = 2;
+  const DEGREES = 2;
 
   if (step > MOVE_DURATION) {
     step = 0;
     moonMover = Matrix4.translate(-75, 30, -10);
     moonRotater = Matrix4.identity();
     blendAmount = 0.0;
+    trailMovers = [];
+    trailRotaters = [];
+    trailShaders = [];
+    trailVaos = [];
     clearInterval(moonInterval);
   } else {
     step += 1;
@@ -337,7 +363,9 @@ function moveTheMoon() {
       blendAmount = 0.0;
     }
 
-    generateTrailVAO(moonVao.positions, moonVao.indices, moonVao.normals, moonVao.texPositions, moonMover, moonRotater);
+    if (trailBox.checked) {
+      generateTrailVAO(moonVao, moonMover, moonRotater);
+    }
     
     moonMover = moonMover.multiplyMatrix(Matrix4.translate(MAX_SPEED * proportion, 0, 0));
     moonRotater = moonRotater.multiplyMatrix(Matrix4.rotateX(DEGREES));
@@ -346,56 +374,18 @@ function moveTheMoon() {
   render();
 }
 
-function generateTrailVAO(positions, indicies, normals, texPositions, mover, rotater) {
-  const vertexSource = `
-    uniform mat4 clipFromEye;
-    uniform mat4 eyeFromWorld;
-    uniform mat4 worldFromModel;
+function generateTrailVAO(vao, mover, rotater) {
+  trailShaders.push(moonShaderProgram);
+  trailVaos.push(vao);
+  trailMovers.push(mover.multiplyMatrix(Matrix4.translate(-5, 0, 0)));
+  trailRotaters.push(rotater);
 
-    in vec3 position;
-    in vec2 texPosition;
-    in vec3 normal;
-
-    out vec3 mixNormal;
-    out vec2 mixTexPosition;
-
-    void main() {
-      gl_PointSize = 3.0;
-      gl_Position = clipFromEye * eyeFromWorld * worldFromModel * vec4(position, 1.0);
-      mixNormal = (eyeFromWorld * worldFromModel * vec4(normal, 0.0)).xyz;
-      mixTexPosition = texPosition;
-    }
-  `;
-
-  const trailFragmentSource = `
-    uniform sampler2D defaultTexture;
-    uniform sampler2D blurredTexture;
-    uniform float opacity;
-
-    const float ambientFactor = 0.5;
-    const vec3 lightDirection = normalize(vec3(0.0, 1.0, 0.0));
-    const vec3 albedo = vec3(0.8, 0.8, 0.8);
-
-    in vec3 mixNormal;
-    in vec2 mixTexPosition;
-
-    out vec4 fragmentColor;
-
-    void main() {
-      vec3 normal = normalize(mixNormal);
-      vec4 texel = texture(defaultTexture, mixTexPosition);
-      vec4 texel2 = texture(blurredTexture, mixTexPosition);
-      fragmentColor = mix(texel, texel2, opacity);
-    }
-  `;
-
-  let trailAttribute = new VertexAttributes();
-  trailAttribute.addAttribute('position', 4, 3, positions);
-  trailAttribute.addAttribute('texPosition', 4, 2, texPositions);
-  trailAttribute.addAttribute('normal', 4, 3, normals);
-  trailAttribute.addIndices(indices);
-  trailMovers.push();
-  trailRotaters.push();
+  if (trailVaos.length > TRAIL_DEPTH) {
+    trailVaos.shift();
+    trailShaders.shift();
+    trailMovers.shift();
+    trailRotaters.shift();
+  }
 
 }
 
