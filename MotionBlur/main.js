@@ -90,7 +90,7 @@ function render() {
     trailShaders[i].setUniform1i('defaultTexture', 1);
     trailShaders[i].setUniform1i('blurredTexture', 2);
     trailShaders[i].setUniform1f('blendAmount', blendAmount);
-    trailShaders[i].setUniform1f('opacity', i / trailVaos.length);
+    trailShaders[i].setUniform1f('opacity', (i / trailVaos.length) + 0.1);
     trailVaos[i].bind();
     trailVaos[i].drawIndexed(gl.TRIANGLES);
     trailVaos[i].unbind();
